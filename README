@@ -52,7 +52,7 @@
 	Colas Nahaboo <Colas@Nahaboo.com> and Godmar Back <gback@cs.utah.edu>
 	added support for MODE2/2352 ISO data tracks in bchunk 1.1.0.
 	Matthew Green implemented the -r option for raw MODE2/2352
-	extraction for bchunk 1.2.0.
+	exctraction for bchunk 1.2.0.
   	
   	---
   
@@ -85,8 +85,8 @@
   	
   How to install this stuff:
   	
-  	$ gzip -d -c bchunk-1.2.2.tar.gz | tar xvf -
-  	$ cd bchunk-1.2.2
+  	$ gzip -d -c bchunk-1.3.0.tar.gz | tar xvf -
+  	$ cd bchunk-1.3.0
   	$ make
   	# make install
   	
@@ -144,5 +144,8 @@
 	the audio tracks. If the audio sounds like loud static noise,
 	try this.
 	
-
-
+	The -m flag make binchunker use file names provided in the .cue
+	file and merge them into a new combined binary <image.bin>. 
+	This is intended to correctly handle split .bin files like those
+	produced by redumper.
+	

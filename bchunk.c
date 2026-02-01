@@ -24,8 +24,9 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
+#include <libgen.h>
 
-#define VERSION "1.2.2"
+#define VERSION "1.3.0"
 #define USAGE "Usage: bchunk [-v] [-r] [-p (PSX)] [-w (wav)] [-s (swabaudio)]\n" \
         "         <image.bin> <image.cue> <basename>\n" \
 	"Example: bchunk foo.bin foo.cue foo\n" \
@@ -34,6 +35,8 @@
 	"  -p  PSX mode for MODE2/2352: write 2336 bytes from offset 24\n" \
 	"      (default MODE2/2352 mode writes 2048 bytes from offset 24)\n"\
 	"  -w  Output audio files in WAV format\n" \
+	"  -m  Merge and convert bin files based on files in .cue (experimental)\n" \
+	"      in this mode <image.bin> is the path to a new file that will be created\n" \
 	"  -s  swabaudio: swap byte order in audio tracks\n"
 	
 #define VERSTR	"binchunker for Unix, version " VERSION " by Heikki Hannikainen <hessu@hes.iki.fi>\n" \
@@ -59,11 +62,7 @@
  */
 
 #include <inttypes.h>
-#ifdef _WIN32
-#include <winsock2.h>
-#else
 #include <netinet/in.h>
-#endif
 
 #define bswap_16(x) \
      ((((x) >> 8) & 0xff) | (((x) & 0xff) << 8))
@@ -84,21 +83,24 @@ struct track_t {
 	char *extension;
 	int bstart;
 	int bsize;
-	long startsect;
-	long stopsect;
-	long start;
-	long stop;
+	int32_t startsect;
+	int32_t stopsect;
+	int32_t start;
+	int32_t stop;
 	struct track_t *next;
 };
 
 char *basefile = NULL;
 char *binfile = NULL;
 char *cuefile = NULL;
+char *cuefile_copy = NULL;
+char *bindir = NULL;
 int verbose = 0;
 int psxtruncate = 0;
 int raw = 0;
 int swabaudio = 0;
 int towav = 0;
+int merge = 0;
 
 /*
  *	Parse arguments
@@ -108,10 +110,13 @@ void parse_args(int argc, char *argv[])
 {
 	int s;
 	
-	while ((s = getopt(argc, argv, "swvp?hr")) != -1) {
+	while ((s = getopt(argc, argv, "swvp?hrm")) != -1) {
 		switch (s) {
 			case 'r':
 				raw = 1;
+				break;
+			case 'm':
+				merge = 1;
 				break;
 			case 'v':
 				verbose = 1;
@@ -144,6 +149,8 @@ void parse_args(int argc, char *argv[])
 				break;
 			case 2:
 				cuefile = strdup(argv[optind]);
+				cuefile_copy = strdup(cuefile);
+				bindir = dirname(cuefile_copy);
 				break;
 			case 1:
 				basefile = strdup(argv[optind]);
@@ -160,7 +167,7 @@ void parse_args(int argc, char *argv[])
  *	Convert a mins:secs:frames format to plain frames
  */
 
-long time2frames(char *s)
+int32_t time2frames(char *s)
 {
 	int mins = 0, secs = 0, frames = 0;
 	char *p, *t;
@@ -249,7 +256,7 @@ char *progressbar(float f, int l)
 	static char s[80];
 	int i, n;
 	
-	n = l * f;
+	n = l * (int)f;
 	for (i = 0; i < n; i++) {
 		s[i] = '*';
 	}
@@ -270,7 +277,7 @@ int writetrack(FILE *bf, struct track_t *track, char *bname)
 	char *fname;
 	FILE *f;
 	char buf[SECTLEN+10];
-	long sz, sect, realsz, reallen;
+	int32_t sz, sect, realsz, reallen;
 	char c, *p, *p2, *ep;
 	int32_t l;
 	int16_t i;
@@ -283,22 +290,23 @@ int writetrack(FILE *bf, struct track_t *track, char *bname)
 	
 	printf("%2d: %s ", track->num, fname);
 	
-	if (!(f = fopen(fname, "wb"))) {
+	if (!(f = fopen(fname, "w"))) {
 		fprintf(stderr, " Could not fopen track file: %s\n", strerror(errno));
 		exit(4);
 	}
+
 	
 	if (fseek(bf, track->start, SEEK_SET)) {
 		fprintf(stderr, " Could not fseek to track location: %s\n", strerror(errno));
 		exit(4);
 	}
 	
-	reallen = (track->stopsect - track->startsect + 1) * track->bsize;
+	reallen = (int32_t)(track->stopsect - track->startsect + 1) * track->bsize;
 	if (verbose) {
-		printf("\n mmc sectors %ld->%ld (%ld)", track->startsect, track->stopsect, track->stopsect - track->startsect + 1);
-		printf("\n mmc bytes %ld->%ld (%ld)", track->start, track->stop, track->stop - track->start + 1);
+		printf("\n mmc sectors %" PRId32 "->%" PRId32 " (%" PRId32 ")", track->startsect, track->stopsect, track->stopsect - track->startsect + 1);
+		printf("\n mmc bytes %" PRId32 "->%" PRId32 " (%" PRId32 ")", track->start, track->stop, track->stop - track->start + 1);
 		printf("\n sector data at %d, %d bytes per sector", track->bstart, track->bsize);
-		printf("\n real data %ld bytes", (track->stopsect - track->startsect + 1) * track->bsize);
+		printf("\n real data %" PRId32 " bytes", (track->stopsect - track->startsect + 1) * track->bsize);
 		printf("\n");
 	}
 
@@ -307,28 +315,28 @@ int writetrack(FILE *bf, struct track_t *track, char *bname)
 	if ((track->audio) && (towav)) {
 		// RIFF header
 		fputs("RIFF", f);
-		l = htolel(reallen + WAV_DATA_HLEN + WAV_FORMAT_HLEN + 4);
+		l = (int32_t)htolel((uint32_t)reallen + WAV_DATA_HLEN + WAV_FORMAT_HLEN + 4);
 		fwrite(&l, 4, 1, f);  // length of file, starting from WAVE
 		fputs("WAVE", f);
 		// FORMAT header
 		fputs("fmt ", f);
-		l = htolel(0x10);     // length of FORMAT header
+		l = (int32_t)htolel(0x10);     // length of FORMAT header
 		fwrite(&l, 4, 1, f);
-		i = htoles(0x01);     // constant
+		i = (int16_t)htoles(0x01);     // constant
 		fwrite(&i, 2, 1, f);
-		i = htoles(0x02);	// channels
+		i = (int16_t)htoles(0x02);	// channels
 		fwrite(&i, 2, 1, f);
-		l = htolel(44100);	// sample rate
+		l = (int32_t)htolel(44100);	// sample rate
 		fwrite(&l, 4, 1, f);
-		l = htolel(44100 * 4);	// bytes per second
+		l = (int32_t)htolel(44100 * 4);	// bytes per second
 		fwrite(&l, 4, 1, f);
-		i = htoles(4);		// bytes per sample
+		i = (int16_t)htoles(4);		// bytes per sample
 		fwrite(&i, 2, 1, f);
-		i = htoles(2*8);	// bits per channel
+		i = (int16_t)htoles(2*8);	// bits per channel
 		fwrite(&i, 2, 1, f);
 		// DATA header
 		fputs("data", f);
-		l = htolel(reallen);
+		l = (int32_t)htolel((uint32_t)reallen);
 		fwrite(&l, 4, 1, f);
 	}
 	
@@ -351,7 +359,7 @@ int writetrack(FILE *bf, struct track_t *track, char *bname)
 				}
 			}
 		}
-		if (fwrite(&buf[track->bstart], track->bsize, 1, f) < 1) {
+		if (fwrite(&buf[track->bstart], sizeof(track->bsize), 1, f) < 1) {
 			fprintf(stderr, " Could not write to track: %s\n", strerror(errno));
 			exit(4);
 		}
@@ -360,13 +368,13 @@ int writetrack(FILE *bf, struct track_t *track, char *bname)
 		realsz += track->bsize;
 		if (((sz / SECTLEN) % 500) == 0) {
 			fl = (float)realsz / (float)reallen;
-			printf("\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b%4ld/%-4ld MB  [%s] %3.0f %%", realsz/1024/1024, reallen/1024/1024, progressbar(fl, 20), fl * 100);
+			printf("\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b%4" PRId32 "/%-4" PRId32 " MB  [%s] %3.0f %%", realsz/1024/1024, reallen/1024/1024, progressbar(fl, 20), fl * 100);
 			fflush(stdout);
 		}
 	}
 	
 	fl = (float)realsz / (float)reallen;
-	printf("\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b%4ld/%-4ld MB  [%s] %3.0f %%", realsz/1024/1024, reallen/1024/1024, progressbar(1, 20), fl * 100);
+	printf("\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b%4" PRId32 "/%-4" PRId32 " MB  [%s] %3.0f %%", realsz/1024/1024, reallen/1024/1024, progressbar(1, 20), fl * 100);
 	fflush(stdout);
 	
 	if (ferror(bf)) {
@@ -395,31 +403,46 @@ int main(int argc, char **argv)
 	struct track_t *track = NULL;
 	struct track_t *prevtrack = NULL;
 	struct track_t **prevp = &tracks;
+	int32_t nextsectoroffset = 0;
+	int32_t prevsectoroffset = 0;
 	
-	FILE *binf, *cuef;
+	FILE *binf = NULL, *cuef = NULL, *mergef = NULL;
 	
 	printf("%s", VERSTR);
 	
 	parse_args(argc, argv);
 	
-	if (!((binf = fopen(binfile, "rb")))) {
-		fprintf(stderr, "Could not open BIN %s: %s\n", binfile, strerror(errno));
-		return 2;
+	if (!merge) {
+		if (!((binf = fopen(binfile, "r")))) {
+			fprintf(stderr, "Could not open BIN %s: %s\n", binfile, strerror(errno));
+			return 2;
+		}
+	} else {
+		if (!((mergef = fopen(binfile, "w+bx")))) {
+			fprintf(stderr, "Could not open merged BIN %s: %s\n",binfile,strerror(errno));
+			return 2;
+		}
 	}
 	
 	if (!((cuef = fopen(cuefile, "r")))) {
 		fprintf(stderr, "Could not open CUE %s: %s\n", cuefile, strerror(errno));
 		return 2;
 	}
+
+	if (verbose)
+		printf("Path to BIN/CUE files:%s\n",bindir);
 	
-	printf("Reading the CUE file:\n");
-	
+	/* This unnecessarily ate the first line of the cue file
+	 * which is usually used for file definitions. removed this
+	 * to handle file descriptions correctly in -m (merge) mode
+	 */
 	/* We don't really care about the first line. */
-	if (!fgets(s, CUELLEN, cuef)) {
+	/*if (!fgets(s, CUELLEN, cuef)) {
 		fprintf(stderr, "Could not read first line from %s: %s\n", cuefile, strerror(errno));
 		return 3;
 	}
-	
+	*/
+
 	while (fgets(s, CUELLEN, cuef)) {
 		while ((p = strchr(s, '\r')) || (p = strchr(s, '\n')))
 			*p = '\0';
@@ -472,31 +495,122 @@ int main(int argc, char **argv)
 			*t = '\0';
 			t++;
 			printf(" %s %s", p, t);
-			track->startsect = time2frames(t);
-			track->start = track->startsect * SECTLEN;
-			if (verbose)
-				printf(" (startsect %ld ofs %ld)", track->startsect, track->start);
-			if ((prevtrack) && (prevtrack->stopsect < 0)) {
-				prevtrack->stopsect = track->startsect - 1;
-				prevtrack->stop = track->start - 1;
+			if (strcmp(p,"01") == 0) {
+				track->startsect = prevsectoroffset + time2frames(t);
+				track->start = track->startsect * SECTLEN;
+				if (verbose)
+					printf(" (startsect %" PRId32 " ofs %" PRId32 ")", track->startsect, track->start);
+				if ((prevtrack) && (prevtrack->stopsect < 0)) {
+					prevtrack->stopsect = track->startsect - 1;
+					prevtrack->stop = track->start - 1;
+				}
+			} else if ((strcmp(p,"00") == 0) && (track->num == 1) && (track->audio == 1)) {
+				printf("detected pregap track at track one\n");
+				track->num = 0;
+				track->startsect = prevsectoroffset + time2frames(t);
+				track->start = track->startsect * SECTLEN;
+				
+
+				prevtrack = track;
+				if (!(track = malloc(sizeof(struct track_t)))) {
+					fprintf(stderr, "main(): malloc() failed, out of memory\n");
+					exit(4);
+				}
+
+				*prevp = track;
+				prevp = &track->next;
+				track->next = NULL;
+				track->num = 1;
+
+				track->modes = strdup(prevtrack->modes);
+				track->extension = prevtrack->extension;
+				track->mode = prevtrack->mode;
+				track->audio = prevtrack->audio;
+				track->bsize = prevtrack->bsize;
+				track->bstart = prevtrack->bstart;
+				track->startsect = track->stopsect = -1;
+
+				// add commands to create an additional track here
+				// same configuration as this track
+
+			}
+		} else if ((p = strstr(s, "FILE"))) {
+			// detected a bin file descriptor
+			if (!(p = strchr(p, '"'))) {
+				printf("... did not detect open quote for bin file.\n");
+				exit(3);
+			}
+			p++;
+			
+			if (!(t = strchr(p, '"'))) {
+				printf("... did not detect closing quote for bin file.\n");
+				exit(3);
+			}
+			*t = '\0';
+			t++;
+			
+			if (merge) {
+				char fullpath[200];
+				snprintf(fullpath, sizeof(fullpath), "%s/%s", bindir, p);
+				printf("\nLoading new BIN file: %s", fullpath);
+				if (!((binf = fopen(fullpath, "r")))) {
+					fprintf(stderr, "Could not open BIN %s: %s\n", p, strerror(errno));
+					return 2;
+				}
+			
+				prevsectoroffset = nextsectoroffset;
+
+				unsigned char buffer[8192];
+				size_t bytesRead;
+			
+				// copy bytes from new file into merged file
+				while ((bytesRead = fread(buffer, 1, sizeof(buffer), binf)) > 0) {
+        				if (fwrite(buffer, 1, bytesRead, mergef) != bytesRead) {
+            					fprintf(stderr,"Error writing to merged BIN file\n");
+						return 2;
+            				break;
+        				}
+				}
+
+				fseek(binf, 0, SEEK_END);
+				nextsectoroffset = prevsectoroffset + (1+((int32_t)ftell(binf) - 1) / SECTLEN);
+
+				fclose(binf);
 			}
 		}
 	}
 	
-	if (track) {
-		fseek(binf, 0, SEEK_END);
-		track->stop = ftell(binf) - 1;
-		track->stopsect = track->stop / SECTLEN;
+	if (merge) {
+		if (track) {
+			fseek(mergef, 0, SEEK_END);
+			track->stop = (int32_t)ftell(mergef) - 1;
+			track->stopsect = track->stop / SECTLEN;
+		}
+	} else {
+		if (track) {
+			fseek(binf, 0, SEEK_END);
+			track->stop = (int32_t)ftell(binf) - 1;
+			track->stopsect = track->stop / SECTLEN;
+		}
 	}
-	
+
 	printf("\n\n");
 	
 	
 	printf("Writing tracks:\n\n");
-	for (track = tracks; (track); track = track->next)
-		writetrack(binf, track, basefile);
-		
-	fclose(binf);
+	for (track = tracks; (track); track = track->next) {
+		if (merge) {
+			writetrack(mergef, track, basefile);
+		} else {
+			writetrack(binf, track, basefile);
+		}
+	}
+	
+	if (merge) {
+		fclose(mergef);
+	} else {
+		fclose(binf);
+	}
 	fclose(cuef);
 	
 	return 0;

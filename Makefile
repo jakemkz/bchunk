@@ -1,9 +1,10 @@
-all: bchunk
-
 # For systems with GCC (Linux, and others with GCC installed):
 CC = gcc
 LD = gcc
-CFLAGS = -Wall -Wstrict-prototypes -O2
+CFLAGS = -Wall -Wstrict-prototypes -O2 -Wextra -pedantic -Werror
+CFLAGS_PED = -Wall -Wstrict-prototypes -O2 -g -Wextra -pedantic -Werror -Wformat -Wconversion -Wstrict-aliasing -Wundef -Wshadow -Wsign-conversion -fstrict-overflow
+
+all: bchunk
 
 # For systems with a legacy CC:
 #CC = cc
@@ -12,15 +13,15 @@ CFLAGS = -Wall -Wstrict-prototypes -O2
 
 # For BSD install: Which install to use and where to put the files
 INSTALL = install
-INSTALL_DIR = $(INSTALL) -d -m 0755
-INSTALL_DATA = $(INSTALL) -m 0644
-INSTALL_EXEC = $(INSTALL) -m 0755
 PREFIX  = /usr/local
 BIN_DIR = $(PREFIX)/bin
 MAN_DIR = $(PREFIX)/man
 
 .c.o:
 	$(CC) $(CFLAGS) -c $<
+
+debug:	CFLAGS = $(CFLAGS_PED)
+debug:	bchunk
 
 clean:
 	rm -f *.o *~ *.bak core
@@ -29,16 +30,14 @@ distclean: clean
 
 install: installbin installman
 installbin:
-	$(INSTALL_DIR) $(DESTDIR)$(BIN_DIR)
-	$(INSTALL_EXEC) -s bchunk $(DESTDIR)$(BIN_DIR)
+	$(INSTALL) -m 755 -s -o root -g root bchunk		$(BIN_DIR)
 installman:
-	$(INSTALL_DIR) $(DESTDIR)$(MAN_DIR)/man1
-	$(INSTALL_DATA) bchunk.1 $(DESTDIR)$(MAN_DIR)/man1
+	$(INSTALL) -m 644 -o bin -g bin bchunk.1	 	$(MAN_DIR)/man1
 
 BITS = bchunk.o
 
 bchunk: $(BITS)
-	$(LD) -o bchunk $(BITS) $(LDFLAGS)
+	$(LD) $(LDFLAGS) -o bchunk $(BITS)
 
 bchunk.o:	bchunk.c
 

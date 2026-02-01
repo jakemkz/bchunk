@@ -63,3 +63,14 @@
 	Clarify manual page for input/output file types
 	Improvement from Reuben Thomas, debian bug: #503151
 
+1.3.0 - Feb 01 2026 - Jakemkz
+
+	Added support for split bin files for example those produced by
+	redumper using the new -m flag
+
+	Added support for converting pre-gap audio tracks to wav.
+	
+	Added additional logic to ensure audio tracks are started at INDEX 01
+
+	Added debug mode to makefile with strict compiler flags and made
+	adjustments to compile without warnings
