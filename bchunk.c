@@ -37,6 +37,9 @@
 	"  -w  Output audio files in WAV format\n" \
 	"  -m  Merge and convert bin files based on files in .cue (experimental)\n" \
 	"      in this mode <image.bin> is the path to a new file that will be created\n" \
+	"      a matching <image.cue> file will be produced to accompany the merged bin\n" \
+	"      dropping the <basename> argument in merge mode performs the bin/cue\n" \
+	"      merge without creating additional output files (eg. WAV, ISO, etc.)\n" \
 	"  -s  swabaudio: swap byte order in audio tracks\n"
 	
 #define VERSTR	"binchunker for Unix, version " VERSION " by Heikki Hannikainen <hessu@hes.iki.fi>\n" \
@@ -62,7 +65,11 @@
  */
 
 #include <inttypes.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#else
 #include <netinet/in.h>
+#endif
 
 #define bswap_16(x) \
      ((((x) >> 8) & 0xff) | (((x) & 0xff) << 8))
@@ -101,6 +108,7 @@ int raw = 0;
 int swabaudio = 0;
 int towav = 0;
 int merge = 0;
+int nowrite = 0;
 
 /*
  *	Parse arguments
@@ -137,29 +145,47 @@ void parse_args(int argc, char *argv[])
 		}
 	}
 
-	if (argc - optind != 3) {
+	if (argc - optind == 3) {
+		while (optind < argc) {
+			switch (argc - optind) {
+				case 3:
+					binfile = strdup(argv[optind]);
+					break;
+				case 2:
+					cuefile = strdup(argv[optind]);
+					cuefile_copy = strdup(cuefile);
+					bindir = dirname(cuefile_copy);
+					break;
+				case 1:
+					basefile = strdup(argv[optind]);
+					break;
+				default:
+					fprintf(stderr, "%s", USAGE);
+					exit(1);
+			}
+			optind++;
+		}
+	} else if ((argc - optind == 2) && merge) {
+		nowrite = 1;
+		while (optind < argc) {
+			switch (argc - optind) {
+				case 2:
+					binfile = strdup(argv[optind]);
+					break;
+				case 1:
+					cuefile = strdup(argv[optind]);
+					cuefile_copy = strdup(cuefile);
+					bindir = dirname(cuefile_copy);
+					break;
+				default:
+					fprintf(stderr, "%s", USAGE);
+					exit(1);
+			}
+			optind++;
+		}
+	} else {
 		fprintf(stderr, "%s", USAGE);
 		exit(1);
-	}
-	
-	while (optind < argc) {
-		switch (argc - optind) {
-			case 3:
-				binfile = strdup(argv[optind]);
-				break;
-			case 2:
-				cuefile = strdup(argv[optind]);
-				cuefile_copy = strdup(cuefile);
-				bindir = dirname(cuefile_copy);
-				break;
-			case 1:
-				basefile = strdup(argv[optind]);
-				break;
-			default:
-				fprintf(stderr, "%s", USAGE);
-				exit(1);
-		}
-		optind++;
 	}
 }
 
@@ -167,10 +193,11 @@ void parse_args(int argc, char *argv[])
  *	Convert a mins:secs:frames format to plain frames
  */
 
-int32_t time2frames(char *s)
+int32_t time2frames(char *msf)
 {
 	int mins = 0, secs = 0, frames = 0;
-	char *p, *t;
+	char *p, *t, *s;
+	s = strdup(msf);
 	
 	if (!(p = strchr(s, ':')))
 		return -1;
@@ -187,6 +214,16 @@ int32_t time2frames(char *s)
 	frames = atoi(t);
 	
 	return 75 * (mins * 60 + secs) + frames;
+}
+
+void frames2time(int32_t totalframes, char* msfstring)
+{
+	int mins = totalframes / (75*60);
+	int secs = (totalframes - mins * (75*60)) / 75;
+	int frames = totalframes - mins * (75*60) - secs * (75);
+
+	snprintf(msfstring,50,"%02d" ":" "%02d" ":" "%02d",mins,secs,frames);
+
 }
 
 /*
@@ -398,6 +435,8 @@ int main(int argc, char **argv)
 {
 	char s[CUELLEN+1];
 	char *p, *t;
+	char shiftedmsf[50];
+	char *mergedcue, *ext_pos;
 	struct track_t *tracks = NULL;
 	struct track_t *track = NULL;
 	struct track_t *prevtrack = NULL;
@@ -405,11 +444,12 @@ int main(int argc, char **argv)
 	int32_t nextsectoroffset = 0;
 	int32_t prevsectoroffset = 0;
 	
-	FILE *binf = NULL, *cuef = NULL, *mergef = NULL;
-	
+	FILE *binf = NULL, *cuef = NULL, *mergef = NULL, *mergecf = NULL;
+
 	printf("%s", VERSTR);
 	
 	parse_args(argc, argv);
+
 	
 	if (!merge) {
 		if (!((binf = fopen(binfile, "r")))) {
@@ -417,10 +457,25 @@ int main(int argc, char **argv)
 			return 2;
 		}
 	} else {
+		// create path to matching cue file for merged bin
+		mergedcue = strdup(binfile);
+		ext_pos = strstr(mergedcue, ".bin");
+		if (!(ext_pos == NULL) && mergedcue[0] != '\0') {
+			strcpy(ext_pos,".cue");
+		}else {
+			fprintf(stderr, "Bin file name must end in .bin for merge mode\n");
+			return 2;
+		}
+		// open merged bin and cue files
 		if (!((mergef = fopen(binfile, "w+bx")))) {
 			fprintf(stderr, "Could not open merged BIN %s: %s\n",binfile,strerror(errno));
 			return 2;
 		}
+		if (!((mergecf = fopen(mergedcue, "w+x")))) {
+			fprintf(stderr, "Could not open merged CUE %s: %s\n",mergedcue,strerror(errno));
+			return 2;
+		}
+		fprintf(mergecf, "FILE \"%s\" BINARY\n", binfile);
 	}
 	
 	if (!((cuef = fopen(cuefile, "r")))) {
@@ -446,6 +501,9 @@ int main(int argc, char **argv)
 		while ((p = strchr(s, '\r')) || (p = strchr(s, '\n')))
 			*p = '\0';
 			
+		if (!strstr(s, "FILE") && !strstr(s, "INDEX") && merge)
+			fprintf(mergecf, "%s\n",s); // copy track line as-is
+
 		if ((p = strstr(s, "TRACK"))) {
 			printf("\nTrack ");
 			if (!(p = strchr(p, ' '))) {
@@ -494,6 +552,11 @@ int main(int argc, char **argv)
 			*t = '\0';
 			t++;
 			printf(" %s %s", p, t);
+
+			if(merge) {
+				frames2time(prevsectoroffset+time2frames(t), shiftedmsf);
+				fprintf(mergecf, "    INDEX %s %s\n", p, shiftedmsf);
+			}
 			if (strcmp(p,"01") == 0) {
 				track->startsect = prevsectoroffset + time2frames(t);
 				track->start = track->startsect * SECTLEN;
@@ -595,23 +658,25 @@ int main(int argc, char **argv)
 
 	printf("\n\n");
 	
-	
-	printf("Writing tracks:\n\n");
-	for (track = tracks; (track); track = track->next) {
-		if (merge) {
-			writetrack(mergef, track, basefile);
-		} else {
-			writetrack(binf, track, basefile);
+	if (!nowrite) {
+		printf("Writing tracks:\n\n");
+		for (track = tracks; (track); track = track->next) {
+			if (merge) {
+				writetrack(mergef, track, basefile);
+			} else {
+				writetrack(binf, track, basefile);
+			}
 		}
-	}
 	
+	}
+
 	if (merge) {
 		fclose(mergef);
 	} else {
 		fclose(binf);
 	}
 	fclose(cuef);
-	
+
 	return 0;
 }
 
