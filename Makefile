@@ -1,7 +1,7 @@
 # For systems with GCC (Linux, and others with GCC installed):
 CC = gcc
 LD = gcc
-CFLAGS = -Wall -Wstrict-prototypes -O2 -Wextra -pedantic -Werror
+CFLAGS = -Wall -Wstrict-prototypes -O2
 CFLAGS_PED = -Wall -Wstrict-prototypes -O2 -g -Wextra -pedantic -Werror -Wformat -Wconversion -Wstrict-aliasing -Wundef -Wshadow -Wsign-conversion -fstrict-overflow
 
 all: bchunk

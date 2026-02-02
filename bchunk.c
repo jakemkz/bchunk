@@ -277,7 +277,7 @@ int writetrack(FILE *bf, struct track_t *track, char *bname)
 	char *fname;
 	FILE *f;
 	char buf[SECTLEN+10];
-	int32_t sz, sect, realsz, reallen;
+	long sz, sect, realsz, reallen;
 	char c, *p, *p2, *ep;
 	int32_t l;
 	int16_t i;
@@ -290,23 +290,22 @@ int writetrack(FILE *bf, struct track_t *track, char *bname)
 	
 	printf("%2d: %s ", track->num, fname);
 	
-	if (!(f = fopen(fname, "w"))) {
+	if (!(f = fopen(fname, "wb"))) {
 		fprintf(stderr, " Could not fopen track file: %s\n", strerror(errno));
 		exit(4);
 	}
-
 	
 	if (fseek(bf, track->start, SEEK_SET)) {
 		fprintf(stderr, " Could not fseek to track location: %s\n", strerror(errno));
 		exit(4);
 	}
 	
-	reallen = (int32_t)(track->stopsect - track->startsect + 1) * track->bsize;
+	reallen = (track->stopsect - track->startsect + 1) * track->bsize;
 	if (verbose) {
-		printf("\n mmc sectors %" PRId32 "->%" PRId32 " (%" PRId32 ")", track->startsect, track->stopsect, track->stopsect - track->startsect + 1);
-		printf("\n mmc bytes %" PRId32 "->%" PRId32 " (%" PRId32 ")", track->start, track->stop, track->stop - track->start + 1);
+		printf("\n mmc sectors %" PRId32"->%" PRId32" (%d)", track->startsect, track->stopsect, track->stopsect - track->startsect + 1);
+		printf("\n mmc bytes %" PRId32 "->%" PRId32" (%d)", track->start, track->stop, track->stop - track->start + 1);
 		printf("\n sector data at %d, %d bytes per sector", track->bstart, track->bsize);
-		printf("\n real data %" PRId32 " bytes", (track->stopsect - track->startsect + 1) * track->bsize);
+		printf("\n real data %d bytes", (track->stopsect - track->startsect + 1) * track->bsize);
 		printf("\n");
 	}
 
@@ -315,28 +314,28 @@ int writetrack(FILE *bf, struct track_t *track, char *bname)
 	if ((track->audio) && (towav)) {
 		// RIFF header
 		fputs("RIFF", f);
-		l = (int32_t)htolel((uint32_t)reallen + WAV_DATA_HLEN + WAV_FORMAT_HLEN + 4);
+		l = htolel(reallen + WAV_DATA_HLEN + WAV_FORMAT_HLEN + 4);
 		fwrite(&l, 4, 1, f);  // length of file, starting from WAVE
 		fputs("WAVE", f);
 		// FORMAT header
 		fputs("fmt ", f);
-		l = (int32_t)htolel(0x10);     // length of FORMAT header
+		l = htolel(0x10);     // length of FORMAT header
 		fwrite(&l, 4, 1, f);
-		i = (int16_t)htoles(0x01);     // constant
+		i = htoles(0x01);     // constant
 		fwrite(&i, 2, 1, f);
-		i = (int16_t)htoles(0x02);	// channels
+		i = htoles(0x02);	// channels
 		fwrite(&i, 2, 1, f);
-		l = (int32_t)htolel(44100);	// sample rate
+		l = htolel(44100);	// sample rate
 		fwrite(&l, 4, 1, f);
-		l = (int32_t)htolel(44100 * 4);	// bytes per second
+		l = htolel(44100 * 4);	// bytes per second
 		fwrite(&l, 4, 1, f);
-		i = (int16_t)htoles(4);		// bytes per sample
+		i = htoles(4);		// bytes per sample
 		fwrite(&i, 2, 1, f);
-		i = (int16_t)htoles(2*8);	// bits per channel
+		i = htoles(2*8);	// bits per channel
 		fwrite(&i, 2, 1, f);
 		// DATA header
 		fputs("data", f);
-		l = (int32_t)htolel((uint32_t)reallen);
+		l = htolel(reallen);
 		fwrite(&l, 4, 1, f);
 	}
 	
@@ -359,7 +358,7 @@ int writetrack(FILE *bf, struct track_t *track, char *bname)
 				}
 			}
 		}
-		if (fwrite(&buf[track->bstart], sizeof(track->bsize), 1, f) < 1) {
+		if (fwrite(&buf[track->bstart], track->bsize, 1, f) < 1) {
 			fprintf(stderr, " Could not write to track: %s\n", strerror(errno));
 			exit(4);
 		}
@@ -368,13 +367,13 @@ int writetrack(FILE *bf, struct track_t *track, char *bname)
 		realsz += track->bsize;
 		if (((sz / SECTLEN) % 500) == 0) {
 			fl = (float)realsz / (float)reallen;
-			printf("\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b%4" PRId32 "/%-4" PRId32 " MB  [%s] %3.0f %%", realsz/1024/1024, reallen/1024/1024, progressbar(fl, 20), fl * 100);
+			printf("\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b%4ld/%-4ld MB  [%s] %3.0f %%", realsz/1024/1024, reallen/1024/1024, progressbar(fl, 20), fl * 100);
 			fflush(stdout);
 		}
 	}
 	
 	fl = (float)realsz / (float)reallen;
-	printf("\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b%4" PRId32 "/%-4" PRId32 " MB  [%s] %3.0f %%", realsz/1024/1024, reallen/1024/1024, progressbar(1, 20), fl * 100);
+	printf("\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b%4ld/%-4ld MB  [%s] %3.0f %%", realsz/1024/1024, reallen/1024/1024, progressbar(1, 20), fl * 100);
 	fflush(stdout);
 	
 	if (ferror(bf)) {
