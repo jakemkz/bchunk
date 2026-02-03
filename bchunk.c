@@ -672,6 +672,7 @@ int main(int argc, char **argv)
 
 	if (merge) {
 		fclose(mergef);
+		fclose(mergecf);
 	} else {
 		fclose(binf);
 	}
