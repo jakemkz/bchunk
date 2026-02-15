@@ -483,26 +483,18 @@ int main(int argc, char **argv)
 		return 2;
 	}
 
-	if (verbose)
+	if (verbose) {
+		printf("Reading the CUE file\n");
 		printf("Path to BIN/CUE files:%s\n",bindir);
-	
-	/* This unnecessarily ate the first line of the cue file
-	 * which is usually used for file definitions. removed this
-	 * to handle file descriptions correctly in -m (merge) mode
-	 */
-	/* We don't really care about the first line. */
-	/*if (!fgets(s, CUELLEN, cuef)) {
-		fprintf(stderr, "Could not read first line from %s: %s\n", cuefile, strerror(errno));
-		return 3;
 	}
-	*/
 
+	// loop over lines in CUE file
 	while (fgets(s, CUELLEN, cuef)) {
 		while ((p = strchr(s, '\r')) || (p = strchr(s, '\n')))
 			*p = '\0';
 			
 		if (!strstr(s, "FILE") && !strstr(s, "INDEX") && merge)
-			fprintf(mergecf, "%s\n",s); // copy track line as-is
+			fprintf(mergecf, "%s\n",s); // copy all lines as-is except FILE/INDEX
 
 		if ((p = strstr(s, "TRACK"))) {
 			printf("\nTrack ");
@@ -567,6 +559,9 @@ int main(int argc, char **argv)
 					prevtrack->stop = track->start - 1;
 				}
 			} else if ((strcmp(p,"00") == 0) && (track->num == 1) && (track->audio == 1)) {
+				// special handling for audio at INDEX 00 on TRACK 01
+				// split audio out into track->num 0 so that pre-gap
+				// audio is preserved, create a new track for INDEX 01
 				printf("detected pregap track at track one\n");
 				track->num = 0;
 				track->startsect = prevsectoroffset + time2frames(t);
@@ -591,9 +586,6 @@ int main(int argc, char **argv)
 				track->bsize = prevtrack->bsize;
 				track->bstart = prevtrack->bstart;
 				track->startsect = track->stopsect = -1;
-
-				// add commands to create an additional track here
-				// same configuration as this track
 
 			}
 		} else if ((p = strstr(s, "FILE"))) {

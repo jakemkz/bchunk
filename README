@@ -144,7 +144,7 @@
 	the audio tracks. If the audio sounds like loud static noise,
 	try this.
 	
-	The -m flag make binchunker use file names provided in the .cue
+	The -m flag makes binchunker use file names provided in the .cue
 	file and merge them into a new combined binary <image.bin>. 
 	This is intended to correctly handle split .bin files like those
 	produced by redumper.
